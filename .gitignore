@@ -1,0 +1,58 @@
+# ----------------------
+# Python
+# ----------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# ----------------------
+# IDE / Editor
+# ----------------------
+.vscode/
+.idea/
+
+# ----------------------
+# OS files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# Logs / temp
+# ----------------------
+*.log
+*.tmp
+
+# ----------------------
+# Large data / images
+# ----------------------
+*.tif
+*.tiff
+*.dicom
+*.dcm
+
+# Optional: ignore large images
+# (keep small test images only)
+assets/large/
+
+# ----------------------
+# Build / outputs
+# ----------------------
+dist/
+build/
+
+# ----------------------
+# Jupyter (if used)
+# ----------------------
+.ipynb_checkpoints/
+
+# ----------------------
+# Misc
+# ----------------------
+*.zip

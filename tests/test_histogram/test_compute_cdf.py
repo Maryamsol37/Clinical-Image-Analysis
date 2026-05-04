@@ -4,7 +4,7 @@ Unit Tests for compute_cdf function
 Tests cumulative distribution function computation.
 
 Menna Hesham Ragab Allam - 1220321
-Module: core/histogram/local_equalization.py
+Module: processing/histogram/local_equalization.py
 Function: compute_cdf
 """
 

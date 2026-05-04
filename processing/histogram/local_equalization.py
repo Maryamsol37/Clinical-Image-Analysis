@@ -1,4 +1,5 @@
 import numpy as np
+
 def compute_histogram(image_array, bins=256):
     # Input validation
     if image_array is None:
@@ -32,6 +33,7 @@ def compute_histogram(image_array, bins=256):
     bin_edges = np.arange(bins + 1, dtype=np.int64)
     
     return hist, bin_edges
+
 def compute_cdf(hist):
     # Input validation
     if hist is None:
@@ -63,7 +65,6 @@ def compute_cdf(hist):
     cdf_normalized = (cdf - cdf_min) / (cdf_max - cdf_min) * 255.0
     
     return cdf_normalized
-
 
 def global_histogram_equalization(image_array):
     # Input validation

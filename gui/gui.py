@@ -3,9 +3,18 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import tkinter as tk
 import numpy as np
-from image_loader import load_regular_image, load_dicom_image, get_dicom_tag
-from metadata import build_metadata_text
-from zoom import zoom_image
+from image_io.image_loader import load_regular_image, load_dicom_image, get_dicom_tag
+from image_io.metadata import build_metadata_text
+from processing.interpolation.zoom import zoom_image
+
+from pipeline.pipeline_manager import PipelineManager
+
+from processing.filtering.linear_filters import apply_average, apply_gaussian
+from processing.filtering.nonlinear_filters import median_filter
+from processing.filtering.edge_detection import apply_edge_detection
+from processing.histogram.local_equalization import local_histogram_equalization
+from processing.geometry.transformations import rotate, shear
+
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -127,9 +136,11 @@ class ScrollableImageView(ctk.CTkFrame):
 
 class MedicalImageApp:
     def __init__(self):
-        self.current_original = None      
-        self.current_processed = None     
+        self.current_original = None
+        self.current_processed = None
         self.zoom_factor = 1.0
+
+        self.pipeline = PipelineManager()
 
         self.app = ctk.CTk()
         self.app.title("Clinical Image Analysis Workbench")
@@ -177,6 +188,56 @@ class MedicalImageApp:
 
         ctk.CTkFrame(self.left_panel, height=2, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
+        ctk.CTkFrame(self.left_panel, height=2, fg_color="#444").pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(
+            self.left_panel,
+            text="PIPELINE MODE",
+            font=ctk.CTkFont(size=11),
+            text_color="#888"
+        ).pack(pady=(2, 4))
+
+        self.pipeline_switch = ctk.CTkSwitch(
+            self.left_panel,
+            text="Stack operations",
+            command=self.on_pipeline_toggle
+        )
+        self.pipeline_switch.pack(pady=4, padx=10)
+
+        self.pipeline_mode_label = ctk.CTkLabel(
+            self.left_panel,
+            text="Mode: OFF - operations use original image",
+            font=ctk.CTkFont(size=11),
+            text_color="#aaaaaa",
+            wraplength=180
+        )
+        self.pipeline_mode_label.pack(pady=4, padx=10)
+
+        ctk.CTkButton(
+            self.left_panel,
+            text="Undo Last Step",
+            command=self.undo_last_step,
+            width=180,
+            height=35,
+            font=ctk.CTkFont(size=12),
+            fg_color="#7a4f00",
+            hover_color="#5c3c00"
+        ).pack(pady=4, padx=10)
+
+        ctk.CTkButton(
+            self.left_panel,
+            text="Reset to Original",
+            command=self.reset_pipeline,
+            width=180,
+            height=35,
+            font=ctk.CTkFont(size=12),
+            fg_color="#6b1f1f",
+            hover_color="#4d1717"
+        ).pack(pady=4, padx=10)
+
+        ctk.CTkFrame(self.left_panel, height=2, fg_color="#444").pack(fill="x", padx=10, pady=10)
+
+
         ctk.CTkLabel(self.left_panel, text="ZOOM",
                      font=ctk.CTkFont(size=11), text_color="#888").pack(pady=(2, 4))
 
@@ -223,9 +284,13 @@ class MedicalImageApp:
         self.tab_view = ctk.CTkTabview(self.right_area)
         self.tab_view.pack(fill="both", expand=True)
         self.tab_view.add("Image Viewer")
+        self.tab_view.add("Operations")
+        self.tab_view.add("Pipeline Log")
         self.tab_view.add("Metadata")
 
         self.build_image_viewer_tab()
+        self.build_operations_tab()
+        self.build_pipeline_log_tab()
         self.build_metadata_tab()
 
     def build_image_viewer_tab(self):
@@ -247,6 +312,162 @@ class MedicalImageApp:
                      font=ctk.CTkFont(size=13, weight="bold")).pack(pady=5)
         self.processed_image_view = ScrollableImageView(processed_frame, height=450, width=450)
         self.processed_image_view.pack(fill="both", expand=True, padx=5, pady=5)
+
+
+    def build_operations_tab(self):
+        operations_tab = self.tab_view.tab("Operations")
+
+        scroll_frame = ctk.CTkScrollableFrame(operations_tab)
+        scroll_frame.pack(fill="both", expand=True, padx=15, pady=15)
+
+        ctk.CTkLabel(
+            scroll_frame,
+            text="Spatial Enhancement Operations",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=(5, 15))
+
+        # ---------------- Filtering ----------------
+        filtering_frame = ctk.CTkFrame(scroll_frame)
+        filtering_frame.pack(fill="x", padx=10, pady=8)
+
+        ctk.CTkLabel(
+            filtering_frame,
+            text="Filtering",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=8)
+
+        self.kernel_size_entry = ctk.CTkEntry(
+            filtering_frame,
+            placeholder_text="Kernel size, e.g. 3 or 5"
+        )
+        self.kernel_size_entry.pack(padx=10, pady=4, fill="x")
+        self.kernel_size_entry.insert(0, "3")
+
+        self.gaussian_sigma_entry = ctk.CTkEntry(
+            filtering_frame,
+            placeholder_text="Gaussian sigma, e.g. 1.0"
+        )
+        self.gaussian_sigma_entry.pack(padx=10, pady=4, fill="x")
+        self.gaussian_sigma_entry.insert(0, "1.0")
+
+        filter_buttons = ctk.CTkFrame(filtering_frame, fg_color="transparent")
+        filter_buttons.pack(pady=8)
+
+        ctk.CTkButton(
+            filter_buttons,
+            text="Average Filter",
+            command=self.apply_average_filter,
+            width=140
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            filter_buttons,
+            text="Gaussian Filter",
+            command=self.apply_gaussian_filter,
+            width=140
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            filter_buttons,
+            text="Median Filter",
+            command=self.apply_median_filter,
+            width=140
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            filtering_frame,
+            text="Sobel Edge Detection",
+            command=self.apply_sobel_edges,
+            width=220
+        ).pack(pady=8)
+
+        # ---------------- Histogram ----------------
+        histogram_frame = ctk.CTkFrame(scroll_frame)
+        histogram_frame.pack(fill="x", padx=10, pady=8)
+
+        ctk.CTkLabel(
+            histogram_frame,
+            text="Local Histogram Equalization",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=8)
+
+        self.block_size_entry = ctk.CTkEntry(
+            histogram_frame,
+            placeholder_text="Block size, e.g. 8 or 16"
+        )
+        self.block_size_entry.pack(padx=10, pady=4, fill="x")
+        self.block_size_entry.insert(0, "8")
+
+        ctk.CTkButton(
+            histogram_frame,
+            text="Apply Local Equalization",
+            command=self.apply_local_equalization,
+            width=220
+        ).pack(pady=8)
+
+        # ---------------- Geometry ----------------
+        geometry_frame = ctk.CTkFrame(scroll_frame)
+        geometry_frame.pack(fill="x", padx=10, pady=8)
+
+        ctk.CTkLabel(
+            geometry_frame,
+            text="Geometric Transformations",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=8)
+
+        self.rotation_angle_entry = ctk.CTkEntry(
+            geometry_frame,
+            placeholder_text="Rotation angle in degrees, e.g. 30"
+        )
+        self.rotation_angle_entry.pack(padx=10, pady=4, fill="x")
+        self.rotation_angle_entry.insert(0, "30")
+
+        ctk.CTkButton(
+            geometry_frame,
+            text="Rotate",
+            command=self.apply_rotation,
+            width=220
+        ).pack(pady=8)
+
+        self.shear_x_entry = ctk.CTkEntry(
+            geometry_frame,
+            placeholder_text="Shear X, e.g. 0.2"
+        )
+        self.shear_x_entry.pack(padx=10, pady=4, fill="x")
+        self.shear_x_entry.insert(0, "0.2")
+
+        self.shear_y_entry = ctk.CTkEntry(
+            geometry_frame,
+            placeholder_text="Shear Y, e.g. 0.0"
+        )
+        self.shear_y_entry.pack(padx=10, pady=4, fill="x")
+        self.shear_y_entry.insert(0, "0.0")
+
+        ctk.CTkButton(
+            geometry_frame,
+            text="Shear",
+            command=self.apply_shearing,
+            width=220
+        ).pack(pady=8)
+
+    def build_pipeline_log_tab(self):
+        log_tab = self.tab_view.tab("Pipeline Log")
+
+        ctk.CTkLabel(
+            log_tab,
+            text="Sequential Enhancement History",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=10)
+
+        self.pipeline_log_box = ctk.CTkTextbox(
+            log_tab,
+            width=600,
+            height=400,
+            font=ctk.CTkFont(size=13)
+        )
+        self.pipeline_log_box.pack(fill="both", expand=True, padx=20, pady=10)
+        self.pipeline_log_box.insert("1.0", "No operations applied yet.")
+        self.pipeline_log_box.configure(state="disabled")        
 
     def build_metadata_tab(self):
         meta_tab = self.tab_view.tab("Metadata")
@@ -283,6 +504,89 @@ class MedicalImageApp:
         self.metadata_box.configure(state="disabled")
         self.tab_view.set("Metadata")
 
+    def is_pipeline_enabled(self):
+        return self.pipeline_switch.get() == 1
+
+
+    def on_pipeline_toggle(self):
+        if self.is_pipeline_enabled():
+            self.pipeline_mode_label.configure(
+                text="Mode: ON - operations stack on current result"
+            )
+            self.status_label.configure(text="Pipeline mode ON")
+        else:
+            self.pipeline_mode_label.configure(
+                text="Mode: OFF - operations use original image"
+            )
+            self.status_label.configure(text="Pipeline mode OFF")
+
+
+    def update_pipeline_log(self):
+        if not hasattr(self, "pipeline_log_box"):
+            return
+
+        self.pipeline_log_box.configure(state="normal")
+        self.pipeline_log_box.delete("1.0", "end")
+        self.pipeline_log_box.insert("1.0", self.pipeline.get_log_text())
+        self.pipeline_log_box.configure(state="disabled")
+
+
+    def get_valid_odd_integer(self, entry, field_name):
+        try:
+            value = int(entry.get())
+        except ValueError:
+            raise ValueError(f"{field_name} must be an integer.")
+
+        if value < 3:
+            raise ValueError(f"{field_name} must be at least 3.")
+
+        if value % 2 == 0:
+            raise ValueError(f"{field_name} must be odd, such as 3, 5, or 7.")
+
+        return value
+
+
+    def get_valid_float(self, entry, field_name):
+        try:
+            value = float(entry.get())
+        except ValueError:
+            raise ValueError(f"{field_name} must be a number.")
+
+        return value
+
+
+    def apply_pipeline_operation(self, operation_function, operation_name):
+        """
+        Central function for your task.
+
+        All operation buttons should call this function.
+
+        It decides whether to use:
+        - original image, if pipeline mode is OFF
+        - current processed image, if pipeline mode is ON
+        """
+        if not self.pipeline.has_image():
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+
+        try:
+            input_image = self.pipeline.get_input_image(self.is_pipeline_enabled())
+            result = operation_function(input_image)
+
+            self.current_processed = self.pipeline.apply_result(result, operation_name)
+
+            self.show_actual_image(self.processed_image_view, self.current_processed)
+            self.update_pipeline_log()
+
+            self.status_label.configure(text=f"Applied: {operation_name}")
+
+        except Exception as e:
+            messagebox.showerror(
+                "Operation Error",
+                f"Could not apply {operation_name}.\nReason: {str(e)}"
+            )
+            self.status_label.configure(text="Operation failed")        
+
     def load_image(self):
         file_path = filedialog.askopenfilename(
             title="Choose an Image File",
@@ -302,6 +606,9 @@ class MedicalImageApp:
                 pixel_array, dicom_data = load_dicom_image(file_path)
                 self.current_original = pixel_array
                 self.current_processed = pixel_array.copy()
+
+                self.pipeline.set_original(pixel_array)
+                self.update_pipeline_log()
 
                 self.show_fit_image(self.original_image_view, self.current_original)
                 self.show_fit_image(self.processed_image_view, self.current_processed)
@@ -323,6 +630,9 @@ class MedicalImageApp:
                 image_array = load_regular_image(file_path)
                 self.current_original = image_array
                 self.current_processed = image_array.copy()
+
+                self.pipeline.set_original(image_array)
+                self.update_pipeline_log()
 
                 self.show_fit_image(self.original_image_view, self.current_original)
                 self.show_fit_image(self.processed_image_view, self.current_processed)
@@ -351,6 +661,8 @@ class MedicalImageApp:
             self.status_label.configure(text="Error loading image")
 
     def save_image(self):
+        self.current_processed = self.pipeline.get_current()
+
         if self.current_processed is None:
             messagebox.showwarning("No Image", "Please load an image first!")
             return
@@ -376,21 +688,27 @@ class MedicalImageApp:
 
 
     def apply_zoom(self):
-        if self.current_original is None:
+        if not self.pipeline.has_image():
             messagebox.showwarning("Warning", "No image loaded. Please load an image first.")
             return
 
         method = "nearest" if self.zoom_method.get() == "Nearest Neighbor" else "bilinear"
 
         try:
-            zoomed = zoom_image(self.current_original, self.zoom_factor, method)
-            self.current_processed = zoomed
+            input_image = self.pipeline.get_input_image(self.is_pipeline_enabled())
+            zoomed = zoom_image(input_image, self.zoom_factor, method)
+
+            operation_name = f"Zoom {int(self.zoom_factor * 100)}% ({method})"
+            self.current_processed = self.pipeline.apply_result(zoomed, operation_name)
+
             self.show_actual_image(self.processed_image_view, self.current_processed)
-            self.status_label.configure(
-                text=f"Zoom {int(self.zoom_factor * 100)}% ({method})"
-            )
+            self.update_pipeline_log()
+
+            self.status_label.configure(text=operation_name)
+
         except Exception as e:
             messagebox.showerror("Zoom Error", f"Could not apply zoom.\nReason: {str(e)}")
+
 
     def zoom_in(self):
         if self.current_original is None:
@@ -409,13 +727,173 @@ class MedicalImageApp:
         self.apply_zoom()
 
     def reset_zoom(self):
-        if self.current_original is None:
+        if not self.pipeline.has_image():
             return
+
         self.zoom_factor = 1.0
         self.zoom_label.configure(text="Zoom: 100%")
-        self.current_processed = self.current_original.copy()
+
+        self.current_processed = self.pipeline.get_current()
         self.show_fit_image(self.processed_image_view, self.current_processed)
-        self.status_label.configure(text="Zoom reset")
+
+        self.status_label.configure(text="Zoom view reset")
+
+    def apply_average_filter(self):
+        try:
+            kernel_size = self.get_valid_odd_integer(
+                self.kernel_size_entry,
+                "Kernel size"
+            )
+
+            self.apply_pipeline_operation(
+                lambda img: apply_average(img, kernel_size),
+                f"Average Filter ({kernel_size}x{kernel_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_gaussian_filter(self):
+        try:
+            kernel_size = self.get_valid_odd_integer(
+                self.kernel_size_entry,
+                "Kernel size"
+            )
+
+            sigma = self.get_valid_float(
+                self.gaussian_sigma_entry,
+                "Gaussian sigma"
+            )
+
+            if sigma <= 0:
+                raise ValueError("Gaussian sigma must be greater than 0.")
+
+            self.apply_pipeline_operation(
+                lambda img: apply_gaussian(img, kernel_size, sigma),
+                f"Gaussian Filter ({kernel_size}x{kernel_size}, sigma={sigma})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_median_filter(self):
+        try:
+            kernel_size = self.get_valid_odd_integer(
+                self.kernel_size_entry,
+                "Kernel size"
+            )
+
+            self.apply_pipeline_operation(
+                lambda img: median_filter(img, kernel_size),
+                f"Median Filter ({kernel_size}x{kernel_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_sobel_edges(self):
+        def sobel_operation(img):
+            grad_x, grad_y, magnitude = apply_edge_detection(img)
+            return magnitude
+
+        self.apply_pipeline_operation(
+            sobel_operation,
+            "Sobel Edge Detection - Combined Magnitude"
+        )
+
+
+    def apply_local_equalization(self):
+        try:
+            block_size = self.get_valid_odd_integer(
+                self.block_size_entry,
+                "Block size"
+            )
+
+            self.apply_pipeline_operation(
+                lambda img: local_histogram_equalization(img, block_size),
+                f"Local Histogram Equalization (block size={block_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_rotation(self):
+        try:
+            angle = self.get_valid_float(
+                self.rotation_angle_entry,
+                "Rotation angle"
+            )
+
+            self.apply_pipeline_operation(
+                lambda img: rotate(img, angle),
+                f"Rotation ({angle} degrees)"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_shearing(self):
+        try:
+            shear_x = self.get_valid_float(
+                self.shear_x_entry,
+                "Shear X"
+            )
+
+            shear_y = self.get_valid_float(
+                self.shear_y_entry,
+                "Shear Y"
+            )
+
+            self.apply_pipeline_operation(
+                lambda img: shear(img, shear_x=shear_x, shear_y=shear_y),
+                f"Shearing (x={shear_x}, y={shear_y})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+    def undo_last_step(self):
+        if not self.pipeline.has_image():
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+
+        previous_image, removed_operation = self.pipeline.undo()
+
+        if previous_image is None:
+            messagebox.showinfo("Undo", "There is no previous step to undo.")
+            return
+
+        self.current_processed = previous_image.copy()
+        self.show_actual_image(self.processed_image_view, self.current_processed)
+        self.update_pipeline_log()
+
+        if removed_operation is None:
+            self.status_label.configure(text="Nothing to undo")
+            messagebox.showinfo("Undo", "There is no operation to undo.")
+        else:
+            self.status_label.configure(text=f"Undid: {removed_operation}")
+
+
+    def reset_pipeline(self):
+        if not self.pipeline.has_image():
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+
+        reset_image = self.pipeline.reset()
+
+        self.current_processed = reset_image.copy()
+        self.show_fit_image(self.processed_image_view, self.current_processed)
+        self.update_pipeline_log()
+
+        self.zoom_factor = 1.0
+        self.zoom_label.configure(text="Zoom: 100%")
+
+        self.status_label.configure(text="Reset to original")            
 
     def run(self):
         self.app.mainloop()

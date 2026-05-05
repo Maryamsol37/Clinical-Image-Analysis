@@ -144,8 +144,8 @@ class MedicalImageApp:
 
         self.app = ctk.CTk()
         self.app.title("Clinical Image Analysis Workbench")
-        self.app.geometry("1100x700")
-        self.app.minsize(900, 600)
+        self.app.geometry("1200x800")
+        self.app.minsize(1000, 700)
 
         self.build_layout()
         self.build_left_panel()
@@ -337,7 +337,9 @@ class MedicalImageApp:
         self.build_operation_controls(main_viewer_frame)
 
     def build_operation_controls(self, parent):
-        controls_frame = ctk.CTkFrame(parent)
+        # Fixed-height scrollable operations area.
+        # This prevents the controls from being cut off when the window is not tall enough.
+        controls_frame = ctk.CTkScrollableFrame(parent, height=230)
         controls_frame.pack(fill="x", padx=5, pady=(0, 5))
 
         ctk.CTkLabel(
@@ -346,7 +348,7 @@ class MedicalImageApp:
             font=ctk.CTkFont(size=15, weight="bold")
         ).pack(pady=(8, 4))
 
-        # Use columns so everything is visible under the images.
+        # Container for the three operation sections.
         sections_frame = ctk.CTkFrame(controls_frame, fg_color="transparent")
         sections_frame.pack(fill="x", padx=8, pady=5)
 
@@ -753,11 +755,23 @@ class MedicalImageApp:
         method = "nearest" if self.zoom_method.get() == "Nearest Neighbor" else "bilinear"
 
         try:
-            # Zoom the current processed image for viewing only.
-            # Do not save zoom into the pipeline history.
             input_image = self.pipeline.get_current()
-            zoomed = zoom_image(input_image, self.zoom_factor, method)
 
+            if input_image is None:
+                messagebox.showwarning("Warning", "No image loaded. Please load an image first.")
+                return
+
+            # At 100%, return to the normal fitted processed image.
+            # Do not display it as actual size, because that looks zoomed in.
+            if self.zoom_factor == 1.0:
+                self.current_processed = input_image.copy()
+                self.show_fit_image(self.processed_image_view, self.current_processed)
+                self.status_label.configure(text="Viewing zoom: 100%")
+                return
+
+            # For zoom in/out, use the custom interpolation function.
+            # This zoom is visual only and does not modify the pipeline result.
+            zoomed = zoom_image(input_image, self.zoom_factor, method)
             self.show_actual_image(self.processed_image_view, zoomed)
 
             self.status_label.configure(
@@ -766,20 +780,22 @@ class MedicalImageApp:
 
         except Exception as e:
             messagebox.showerror("Zoom Error", f"Could not apply zoom.\nReason: {str(e)}")
-
+   
     def zoom_in(self):
-        if self.current_original is None:
+        if not self.pipeline.has_image():
             messagebox.showwarning("Warning", "No image loaded. Please load an image first.")
             return
-        self.zoom_factor = min(round(self.zoom_factor + 0.25, 2), 4.0)   # max 400%
+
+        self.zoom_factor = min(round(self.zoom_factor + 0.25, 2), 4.0)
         self.zoom_label.configure(text=f"Zoom: {int(self.zoom_factor * 100)}%")
         self.apply_zoom()
 
     def zoom_out(self):
-        if self.current_original is None:
+        if not self.pipeline.has_image():
             messagebox.showwarning("Warning", "No image loaded. Please load an image first.")
             return
-        self.zoom_factor = max(round(self.zoom_factor - 0.25, 2), 0.25)   # min 25%
+
+        self.zoom_factor = max(round(self.zoom_factor - 0.25, 2), 0.25)
         self.zoom_label.configure(text=f"Zoom: {int(self.zoom_factor * 100)}%")
         self.apply_zoom()
 
@@ -791,7 +807,9 @@ class MedicalImageApp:
         self.zoom_label.configure(text="Zoom: 100%")
 
         self.current_processed = self.pipeline.get_current()
-        self.show_fit_image(self.processed_image_view, self.current_processed)
+
+        if self.current_processed is not None:
+            self.show_fit_image(self.processed_image_view, self.current_processed)
 
         self.status_label.configure(text="Zoom view reset")
         

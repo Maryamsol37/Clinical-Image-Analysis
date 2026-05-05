@@ -457,7 +457,7 @@ class MedicalImageApp:
 
         ctk.CTkLabel(
             histogram_frame,
-            text="Example: 8, 16, 32",
+            text="Odd Numbers",
             font=ctk.CTkFont(size=10),
             text_color="#999"
         ).pack(anchor="w", padx=10, pady=(0, 6))

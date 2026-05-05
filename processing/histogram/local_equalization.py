@@ -8,14 +8,13 @@ def compute_histogram(image_array, bins=256):
     if image_array.size == 0:
         raise ValueError("Input image is empty. Cannot compute histogram.")
     
-    # Initialize histogram with zeros (using numpy for efficiency)
+    # Initialize histogram with zeros
     hist = np.zeros(bins, dtype=np.int64)
     
     # Flatten image to 1D for iteration
     flat_image = image_array.flatten()
     
-    # Manual counting loop - this is the "from scratch" implementation
-    # No np.histogram, np.bincount, or similar built-ins
+    # Manual counting loop
     for pixel_value in flat_image:
         pixel_int = int(pixel_value)
         # Map pixel value to bin index based on number of bins
@@ -33,6 +32,12 @@ def compute_histogram(image_array, bins=256):
     bin_edges = np.arange(bins + 1, dtype=np.int64)
     
     return hist, bin_edges
+
+    """
+        tuple: (hist, bin_edges)
+            - hist (numpy.ndarray): Histogram array of shape (bins) with integer counts
+            - bin_edges (numpy.ndarray): Bin edges array of shape (bins+1,)
+    """
 
 def compute_cdf(hist):
     # Input validation

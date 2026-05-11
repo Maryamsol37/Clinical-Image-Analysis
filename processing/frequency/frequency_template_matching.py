@@ -27,7 +27,7 @@ def _draw_rect(image_rgb: np.ndarray,
                color=(255, 0, 0), thickness: int = 2) -> None:
     """
     Draw a filled-border rectangle on a (H, W, 3) uint8 array **in-place**.
-   
+ 
     """
     ih, iw = image_rgb.shape[:2]
 
@@ -49,17 +49,7 @@ def _draw_rect(image_rgb: np.ndarray,
             image_rgb[r1:r2 + 1, c2 - t] = color
 
 def fourier_cross_correlate(image: np.ndarray, template: np.ndarray):
-    """
-    Locate `template` inside `image` using Fourier cross-correlation.
-
-    Returns
-    -------
-    result_image  : (H, W, 3) uint8 — original image with red bounding box
-    norm_corr_map : (H, W) float64  — normalised correlation map in [0, 1]
-    peak          : (row, col)      — top-left corner of best match
-    (th, tw)      : template height and width
-    """
-
+  
     # ── 1. Grayscale float ────────────────────────────────────────────────────
     gray_image    = _to_gray_float(image)
     gray_template = _to_gray_float(template)

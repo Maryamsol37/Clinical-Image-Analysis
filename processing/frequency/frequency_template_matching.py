@@ -21,4 +21,31 @@ def _to_rgb_uint8(arr: np.ndarray) -> np.ndarray:
         return np.stack([channel, channel, channel], axis=-1)
     return np.clip(arr, 0, 255).astype(np.uint8)
 
+def _draw_rect(image_rgb: np.ndarray,
+               r1: int, c1: int, r2: int, c2: int,
+               color=(255, 0, 0), thickness: int = 2) -> None:
+    """
+    Draw a filled-border rectangle on a (H, W, 3) uint8 array **in-place**.
+   
+    """
+    ih, iw = image_rgb.shape[:2]
+
+    r1 = max(r1, 0)
+    c1 = max(c1, 0)
+    r2 = min(r2, ih - 1)
+    c2 = min(c2, iw - 1)
+
+    for t in range(thickness):
+        # Horizontal edges (top / bottom)
+        if r1 + t < ih:
+            image_rgb[r1 + t, c1:c2 + 1] = color
+        if r2 - t >= 0:
+            image_rgb[r2 - t, c1:c2 + 1] = color
+        # Vertical edges (left / right)
+        if c1 + t < iw:
+            image_rgb[r1:r2 + 1, c1 + t] = color
+        if c2 - t >= 0:
+            image_rgb[r1:r2 + 1, c2 - t] = color
+
+
 

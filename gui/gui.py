@@ -6,13 +6,13 @@ import numpy as np
 from image_io.image_loader import load_regular_image, load_dicom_image, get_dicom_tag
 from image_io.metadata import build_metadata_text
 from processing.interpolation.zoom import zoom_image
+from pipeline.pipeline_manager import PipelineManager
+from gui.widgets.fft_viewer import FFTViewer
+from gui.widgets.notch_panel import NotchPanel
+from processing.frequency.reconstruction import reconstruct_image
 from processing.frequency.fft_utils import compute_fft
 from processing.frequency.spectrum_display import magnitude_spectrum
 from processing.frequency.notch_filters import apply_notch_filter
-from processing.frequency.reconstruction import reconstruct_image
-
-from pipeline.pipeline_manager import PipelineManager
-
 from processing.filtering.linear_filters import apply_average, apply_gaussian
 from processing.filtering.nonlinear_filters import median_filter
 from processing.filtering.edge_detection import apply_edge_detection
@@ -56,6 +56,7 @@ class ScrollableImageView(ctk.CTkFrame):
         self.photo = None  
         self._resize_job = None
 
+
         self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
         self.canvas.bind("<B1-Motion>", self._on_drag_move)
 
@@ -64,12 +65,6 @@ class ScrollableImageView(ctk.CTkFrame):
 
         self._placeholder_text = "No image loaded"
         self.show_placeholder()
-
-        self.frequency_points = []
-
-        self.current_fft = None
-
-        self.current_spectrum = None
 
     def _on_frame_configure(self, event=None):
         """
@@ -164,7 +159,8 @@ class MedicalImageApp:
         self.current_original = None
         self.current_processed = None
         self.zoom_factor = 1.0
-
+        self.fft_shifted = None
+        self.notch_points = []
         self.pipeline = PipelineManager()
 
         self.app = ctk.CTk()
@@ -308,14 +304,15 @@ class MedicalImageApp:
         self.tab_view.pack(fill="both", expand=True)
 
         self.tab_view.add("Image Viewer")
-        self.tab_view.add("Frequency Domain")
         self.tab_view.add("Pipeline Log")
         self.tab_view.add("Metadata")
+        self.tab_view.add("Frequency Domain")
+
 
         self.build_image_viewer_tab()
-        self.build_frequency_tab()
         self.build_pipeline_log_tab()
         self.build_metadata_tab()
+        self.build_frequency_tab()
 
     def build_image_viewer_tab(self):
         viewer_tab = self.tab_view.tab("Image Viewer")
@@ -538,304 +535,6 @@ class MedicalImageApp:
             width=90
         ).pack(side="left", padx=3)
 
-    def build_frequency_tab(self):
-        freq_tab = self.tab_view.tab("Frequency Domain")
-
-        freq_main_frame = ctk.CTkFrame(freq_tab)
-        freq_main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        images_frame = ctk.CTkFrame(freq_main_frame)
-        images_frame.pack(fill="both", expand=True)
-
-        spectrum_frame = ctk.CTkFrame(images_frame)
-        spectrum_frame.pack(side="left", fill="both", expand=True, padx=5)
-
-        ctk.CTkLabel(
-            spectrum_frame,
-            text="Magnitude Spectrum",
-            font=ctk.CTkFont(size=13, weight="bold")
-        ).pack(pady=5)
-        self.spectrum_view = ScrollableImageView(
-            spectrum_frame,
-        )
-        self.spectrum_view.pack(fill="both", expand=True, padx=5, pady=5)
-
-        result_frame = ctk.CTkFrame(images_frame)
-        result_frame.pack(side="right", fill="both", expand=True, padx=5)
-        ctk.CTkLabel(
-            result_frame,
-            text="Filtered Result",
-            font=ctk.CTkFont(size=13, weight="bold")
-        ).pack(pady=5)
-
-        self.filtered_result_view = ScrollableImageView(
-            result_frame,
-        )
-        self.filtered_result_view.pack(fill="both", expand=True, padx=5, pady=5)
-
-        controls= ctk.CTkFrame(freq_main_frame)
-        controls.pack(fill="x", padx=5, pady=(10, 5))
-
-        ctk.CTkButton(
-            controls,
-            text="Apply Filter",
-            command=self.show_fft_spectrum,
-            width=180,
-        ).pack(side="left", padx=5)
-
-        #Filter Type
-        self.notch_filter_type = ctk.CTkOptionMenu(
-            controls,
-            values=["Ideal", "Butterworth", "Gaussian"],
-            width=160,
-        )
-
-        self.notch_filter_type.pack(side="left", padx=5)
-        self.notch_filter_type.set("Gaussian")
-
-        #Radius Slider
-        self.notch_radius_slider = ctk.CTkSlider(
-            controls,
-            from_=2,
-            to=50,
-            number_of_steps=48,
-            width=180,
-        )
-        self.notch_radius_slider.pack(side="left", padx=5)
-        self.notch_radius_slider.set(10)
-
-        #Radius Label
-        self.radius_label = ctk.CTkLabel(
-            controls,
-            text="Radius: 10"
-        )
-
-        self.radius_label.pack(side="left", padx=5)
-
-        self.notch_radius_slider.configure(
-            command=lambda value: self.radius_label.configure(
-                text=f"Radius: {int(value)}"
-            )
-        )
-
-        # Apply Filter Button
-        ctk.CTkButton(
-            controls,
-            text="Apply Notch Filter",
-            command=self.apply_notch_filter_gui,
-            width=180,
-        ).pack(side="left", padx=5)
-        # Clear Points Button
-
-        ctk.CTkButton(
-            controls,
-            text="Clear Points",
-            command=self.clear_frequency_points,
-            width=140
-        ).pack(side="left", padx=5)
-
-        # ================= INSTRUCTIONS =================
-
-        instructions = ctk.CTkLabel(
-            freq_main_frame,
-            text=(
-                "Instructions:\n"
-                "1. Load an image.\n"
-                "2. Click 'Show FFT Spectrum'.\n"
-                "3. Click on bright periodic noise points.\n"
-                "4. Apply the notch filter.\n"
-                "5. Compare the reconstructed image."
-            ),
-            justify="left",
-            text_color="#bbbbbb",
-            font=ctk.CTkFont(size=11)
-        )
-
-        instructions.pack(anchor="w", padx=10, pady=(0, 5))
-
-        # ================= CLICK BINDING =================
-
-        self.spectrum_view.canvas.bind(
-            "<Button-1>",
-            self.on_spectrum_click
-        )
-
-    # =========================================================
-    # Frequency Domain Functions
-    # =========================================================
-
-    def show_fft_spectrum(self):
-        if not self.pipeline.has_image():
-            messagebox.showwarning(
-                "No Image",
-                "Please load an image first."
-            )
-            return
-
-        try:
-            image = self.pipeline.get_current()
-
-            if image is None:
-                messagebox.showwarning(
-                    "No Image",
-                    "No image available."
-                )
-                return
-
-            self.status_label.configure(text="Computing FFT...")
-            self.app.configure(cursor="watch")
-            self.app.update_idletasks()
-
-            fft_shifted = compute_fft(image)
-
-            spectrum = magnitude_spectrum(fft_shifted)
-
-            self.app.configure(cursor="")
-
-            self.spectrum_view.current_fft = fft_shifted
-            self.spectrum_view.current_spectrum = spectrum
-            self.spectrum_view.frequency_points = []
-
-            self.show_fit_image(
-                self.spectrum_view,
-                spectrum
-            )
-
-            self.tab_view.set("Frequency Domain")
-
-            self.status_label.configure(
-                text="FFT Spectrum displayed"
-            )
-
-        except Exception as e:
-            self.app.configure(cursor="")
-
-            messagebox.showerror(
-                "FFT Error",
-                f"Could not compute FFT spectrum.\nReason: {str(e)}"
-            )
-
-            self.status_label.configure(
-                text="FFT failed"
-            )
-
-    def on_spectrum_click(self, event):
-        if self.spectrum_view.current_spectrum is None:
-            return
-
-        canvas = self.spectrum_view.canvas
-
-        x = int(canvas.canvasx(event.x))
-        y = int(canvas.canvasy(event.y))
-
-        self.spectrum_view.frequency_points.append((x, y))
-
-        r = 5
-
-        canvas.create_oval(
-            x - r,
-            y - r,
-            x + r,
-            y + r,
-            outline="red",
-            width=2
-        )
-
-        canvas.create_text(
-            x + 10,
-            y - 10,
-            text=f"{len(self.spectrum_view.frequency_points)}",
-            fill="yellow",
-            font=("Segoe UI", 10, "bold")
-        )
-
-        self.status_label.configure(
-            text=f"Selected frequency point ({x}, {y})"
-        )
-
-    def clear_frequency_points(self):
-        self.spectrum_view.frequency_points = []
-
-        if self.spectrum_view.current_spectrum is not None:
-            self.show_fit_image(
-                self.spectrum_view,
-                self.spectrum_view.current_spectrum
-            )
-
-        self.status_label.configure(
-            text="Frequency points cleared"
-        )
-
-    def apply_notch_filter_gui(self):
-        if self.spectrum_view.current_fft is None:
-            messagebox.showwarning(
-                "No FFT",
-                "Please compute FFT spectrum first."
-            )
-            return
-
-        if len(self.spectrum_view.frequency_points) == 0:
-            messagebox.showwarning(
-                "No Points",
-                "Please select frequency points first."
-            )
-            return
-
-        try:
-            radius = int(self.notch_radius_slider.get())
-
-            filter_type = self.notch_filter_type.get()
-
-            fft_shifted = self.spectrum_view.current_fft
-
-            self.status_label.configure(
-                text=f"Applying {filter_type} notch filter..."
-            )
-
-            self.app.configure(cursor="watch")
-            self.app.update_idletasks()
-
-            filtered_fft = apply_notch_filter(
-                fft_shifted,
-                self.spectrum_view.frequency_points,
-                radius=radius,
-                filter_type=filter_type
-            )
-
-            reconstructed = reconstruct_image(filtered_fft)
-
-            self.app.configure(cursor="")
-
-            self.current_processed = reconstructed
-
-            self.pipeline.current_image = reconstructed
-
-            self.show_fit_image(
-                self.filtered_result_view,
-                reconstructed
-            )
-
-            self.show_fit_image(
-                self.processed_image_view,
-                reconstructed
-            )
-
-            self.status_label.configure(
-                text=f"{filter_type.capitalize()} notch filter applied"
-            )
-
-        except Exception as e:
-            self.app.configure(cursor="")
-
-            messagebox.showerror(
-                "Filtering Error",
-                f"Could not apply notch filter.\nReason: {str(e)}"
-            )
-
-            self.status_label.configure(
-                text="Filtering failed"
-            )
-
     def build_pipeline_log_tab(self):
         log_tab = self.tab_view.tab("Pipeline Log")
 
@@ -922,7 +621,48 @@ class MedicalImageApp:
         zoomed = zoom_image(image_array, display_scale, method)
 
         viewer.set_image(zoomed, fit_to_window=False)            
+    
+    def build_frequency_tab(self):
+        tab= self.tab_view.tab("Frequency Domain")
+        
+        #main controller
+        main_frame = ctk.CTkFrame(tab)
+        main_frame.pack(fill="both", expand=True)
 
+        #Left: Spectrum viewer
+        left_frame = ctk.CTkFrame(main_frame)
+        left_frame.pack(side="left", fill="both", expand=True)
+
+        #FFT label
+        ctk.CTkLabel(
+            left_frame,
+            text="Magnitude Spectrum",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(pady=5)
+
+        #FFT viewer
+        self.fft_viewer = FFTViewer(left_frame, self.on_fft_click)
+        self.fft_viewer.pack(fill="both", expand=True, padx=10, pady=10)
+
+        #RIGHT: Notch filter controls
+        right_frame = ctk.CTkFrame(main_frame, width=420)
+        right_frame.pack(side="right", fill="y", padx=10, pady=10)
+
+        #Reconstructed image label
+        ctk.CTkLabel(
+            right_frame,
+            text="Reconstructed Image",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(pady=5)
+
+        #Reconstructed image viewer
+        self.frequency_result_view = ScrollableImageView(right_frame,width=380, height=300)
+        self.frequency_result_view.pack(fill="both", expand=True, padx=10, pady=10)
+
+        #Notch Panel
+        self.notch_panel = NotchPanel(right_frame, self.apply_notch_filter_gui, self.clear_notch_points)
+        self.notch_panel.pack(fill="x", padx=10, pady=10)
+    
     def show_metadata_text(self, text):
         self.metadata_box.configure(state="normal")
         self.metadata_box.delete("1.0", "end")
@@ -1046,6 +786,16 @@ class MedicalImageApp:
             if file_path.lower().endswith('.dcm'):
                 pixel_array, dicom_data = load_dicom_image(file_path)
                 self.current_original = pixel_array
+                self.fft_shifted = compute_fft(self.current_original)
+
+                spectrum = magnitude_spectrum(self.fft_shifted)
+
+                self.notch_points = []
+
+                if hasattr(self, "fft_viewer"):
+                   self.fft_viewer.set_spectrum(spectrum)
+
+
                 self.current_processed = pixel_array.copy()
 
                 self.pipeline.set_original(pixel_array)
@@ -1053,11 +803,6 @@ class MedicalImageApp:
 
                 self.show_fit_image(self.original_image_view, self.current_original)
                 self.show_fit_image(self.processed_image_view, self.current_processed)
-                self.spectrum_view.clear()
-                self.filtered_result_view.clear()
-                self.spectrum_view.frequency_points = []
-                self.spectrum_view.current_fft = None
-                self.spectrum_view.current_spectrum = None
 
                 h, w = pixel_array.shape
                 text = build_metadata_text(
@@ -1075,6 +820,11 @@ class MedicalImageApp:
             elif file_path.lower().endswith(('.jpg', '.jpeg', '.bmp')):
                 image_array = load_regular_image(file_path)
                 self.current_original = image_array
+                self.fft_shifted = compute_fft(self.current_original)
+                spectrum = magnitude_spectrum(self.fft_shifted)
+                self.notch_points = []
+                if hasattr(self, "fft_viewer"):
+                    self.fft_viewer.set_spectrum(spectrum)
                 self.current_processed = image_array.copy()
 
                 self.pipeline.set_original(image_array)
@@ -1373,11 +1123,54 @@ class MedicalImageApp:
         self.zoom_factor = 1.0
         self.zoom_label.configure(text="Zoom: 100%")
 
-        self.status_label.configure(text="Reset to original")            
+        self.status_label.configure(text="Reset to original")  
+
+    def on_fft_click(self, u, v):
+        self.notch_points.append((u, v))
+        print ("Selected notch point:", u, v )
+
+    def  apply_notch_filter_gui(self, ftype, radius, order):
+        if self.fft_shifted is None:
+            return
+        
+        current_image = self.pipeline.get_current()
+
+        self.fft_shifted = compute_fft(current_image)
+
+        filtered, mask= apply_notch_filter(
+            self.fft_shifted,
+            self.notch_points,
+            filter_type=ftype,
+            radius= radius,
+            order= order
+        )
+        result = reconstruct_image(filtered)
+        print(result.dtype)
+        print(result.min(), result.max())
+        print("Filtered image shape:", result.shape)
+
+        self.current_processed = self.pipeline.apply_result(
+            result,
+            f"{ftype.capitalize()} Notch Filter"
+        )
+
+        self.show_fit_image(self.processed_image_view, result)
+
+        self.update_pipeline_log()
+
+        self.show_fit_image(self.frequency_result_view, result)
+        print("Applying notch filter...")
+        print("Points:", self.notch_points)
+        print("Radius:", radius)
+        print("Type:", ftype)
+
+        self.status_label.configure(text=f"Applied {ftype} notch filter with radius={radius} and order={order}")
+
+    def clear_notch_points(self):
+        self.notch_points = []
+        
+        if hasattr(self,"fft_viewer"):
+            self.fft_viewer.clear_points()
 
     def run(self):
         self.app.mainloop()
-
-if __name__ == "__main__":
-    app = MedicalImageApp()
-    app.run()

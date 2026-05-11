@@ -58,8 +58,8 @@ def butterworth_notch(
 
     for (u, v) in points:
 
-        mirror_u = rows - u
-        mirror_v = cols - v
+        mirror_u = rows // 2 - (u - rows // 2)
+        mirror_v = cols // 2 - (v - cols // 2)
 
         D1 = distance_matrix(shape, u, v)
         D2 = distance_matrix(shape, mirror_u, mirror_v)

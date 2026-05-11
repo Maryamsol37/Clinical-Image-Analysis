@@ -1,4 +1,10 @@
-from .notch_mask import (
+import numpy as np
+import sys
+import os
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.append(ROOT)
+from processing.frequency.notch_mask import (
     ideal_notch,
     butterworth_notch,
     gaussian_notch
@@ -6,44 +12,36 @@ from .notch_mask import (
 
 
 def apply_notch_filter(
-    F_shifted,
+    fft_shifted,
     points,
-    filter_type='ideal',
-    radius=10,
+    filter_type="ideal",
+    radius=20,
     order=2
 ):
 
-    shape = F_shifted.shape
+    rows, cols = fft_shifted.shape
+    shape = (rows, cols)
 
-    if filter_type == 'ideal':
+    print("Applying notch filter...")
+    print("Points:", points)
+    print("Radius:", radius)
+    print("Type:", filter_type)
 
-        mask = ideal_notch(
-            shape,
-            points,
-            radius
-        )
+    if filter_type == "ideal":
 
-    elif filter_type == 'butterworth':
+        mask = ideal_notch(shape, points, radius)
 
-        mask = butterworth_notch(
-            shape,
-            points,
-            radius,
-            order
-        )
+    elif filter_type == "butterworth":
 
-    elif filter_type == 'gaussian':
+        mask = butterworth_notch(shape, points, radius, order)
 
-        mask = gaussian_notch(
-            shape,
-            points,
-            radius
-        )
+    elif filter_type == "gaussian":
+
+        mask = gaussian_notch(shape, points, radius)
 
     else:
+        raise ValueError("Unknown filter type")
 
-        raise ValueError("Invalid filter type")
+    filtered_fft = fft_shifted * mask
 
-    filtered = F_shifted * mask
-
-    return filtered, mask
+    return filtered_fft, mask

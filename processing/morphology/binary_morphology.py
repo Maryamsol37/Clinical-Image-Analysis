@@ -35,8 +35,8 @@ def global_threshold(image, threshold_value):
     """
     Converts a grayscale image into a binary image using a global threshold.
 
-    Pixels >= threshold become 255.
-    Pixels < threshold become 0.
+    Pixels >= threshold become 255 (white).
+    Pixels < threshold become 0 (black).
     """
     gray = convert_to_grayscale(image)
 

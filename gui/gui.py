@@ -21,6 +21,15 @@ from processing.histogram.local_equalization import (
     local_histogram_equalization_optimized
 )
 from processing.geometry.transformations import rotate, shear
+from processing.morphology.binary_morphology import (
+    global_threshold,
+    create_structuring_element,
+    erode,
+    dilate,
+    opening,
+    closing,
+    boundary_extraction
+)
 from processing.noise.noise import add_gaussian_noise, add_uniform_noise
 from processing.roi.roi_tool import extract_roi, draw_roi_on_image
 # Add this with your other imports at the top of gui.py
@@ -417,16 +426,16 @@ class MedicalImageApp:
         self.processed_image_view.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Operation controls are now visible while the user sees the image.
-        self.build_operation_controls(main_viewer_frame)
+        self.build_operation_controls(main_viewer_frame)       
 
         self.processed_image_view.canvas.bind("<ButtonPress-1>",   self._roi_drag_start)
         self.processed_image_view.canvas.bind("<B1-Motion>",       self._roi_drag_move)
         self.processed_image_view.canvas.bind("<ButtonRelease-1>", self._roi_drag_end)
 
     def build_operation_controls(self, parent):
-        # Fixed-height scrollable operations area.
-        # This prevents the controls from being cut off when the window is not tall enough.
-        controls_frame = ctk.CTkScrollableFrame(parent, height=230)
+        # Fixed-height tabbed operations area.
+        # Each tab contains its own scrollable frame so controls do not get cut off.
+        controls_frame = ctk.CTkFrame(parent)
         controls_frame.pack(fill="x", padx=5, pady=(0, 5))
 
         ctk.CTkLabel(
@@ -435,8 +444,29 @@ class MedicalImageApp:
             font=ctk.CTkFont(size=15, weight="bold")
         ).pack(pady=(8, 4))
 
-        # Container for the three operation sections.
-        sections_frame = ctk.CTkFrame(controls_frame, fg_color="transparent")
+        self.operations_tab_view = ctk.CTkTabview(controls_frame, height=260)
+        self.operations_tab_view.pack(fill="x", padx=8, pady=5)
+
+        self.operations_tab_view.add("Enhancement")
+        self.operations_tab_view.add("Morphology")
+
+        enhancement_scroll = ctk.CTkScrollableFrame(
+            self.operations_tab_view.tab("Enhancement"),
+            height=220
+        )
+        enhancement_scroll.pack(fill="both", expand=True, padx=5, pady=5)
+
+        morphology_scroll = ctk.CTkScrollableFrame(
+            self.operations_tab_view.tab("Morphology"),
+            height=220
+        )
+        morphology_scroll.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.build_enhancement_controls(enhancement_scroll)
+        self.build_morphology_controls(morphology_scroll)
+
+    def build_enhancement_controls(self, parent):
+        sections_frame = ctk.CTkFrame(parent, fg_color="transparent")
         sections_frame.pack(fill="x", padx=8, pady=5)
 
         sections_frame.grid_columnconfigure(0, weight=1)
@@ -458,7 +488,7 @@ class MedicalImageApp:
 
         ctk.CTkLabel(
             filtering_frame,
-            text="Kernel Size (odd number: 3, 5, 7...)",
+            text="Kernel Size",
             font=ctk.CTkFont(size=11)
         ).pack(anchor="w", padx=10)
 
@@ -468,7 +498,7 @@ class MedicalImageApp:
 
         ctk.CTkLabel(
             filtering_frame,
-            text="Gaussian Sigma / Standard Deviation",
+            text="Gaussian Sigma",
             font=ctk.CTkFont(size=11)
         ).pack(anchor="w", padx=10)
 
@@ -556,7 +586,7 @@ class MedicalImageApp:
 
         ctk.CTkLabel(
             geometry_frame,
-            text="Rotation Angle (degrees)",
+            text="Rotation Angle",
             font=ctk.CTkFont(size=11)
         ).pack(anchor="w", padx=10)
 
@@ -601,6 +631,153 @@ class MedicalImageApp:
             width=90
         ).pack(side="left", padx=3)
 
+    def build_morphology_controls(self, parent):
+        morphology_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        morphology_frame.pack(fill="x", padx=8, pady=5)
+
+        # ---------------- Threshold section ----------------
+        threshold_frame = ctk.CTkFrame(morphology_frame)
+        threshold_frame.pack(fill="x", padx=5, pady=5)
+
+        ctk.CTkLabel(
+            threshold_frame,
+            text="Thresholding",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(pady=(8, 6))
+
+        self.threshold_value_label = ctk.CTkLabel(
+            threshold_frame,
+            text="Threshold Value: 128",
+            font=ctk.CTkFont(size=12)
+        )
+        self.threshold_value_label.pack(anchor="w", padx=10, pady=(4, 2))
+
+        self.threshold_slider = ctk.CTkSlider(
+            threshold_frame,
+            from_=0,
+            to=255,
+            number_of_steps=255,
+            command=self.on_threshold_slider_change
+        )
+        self.threshold_slider.pack(fill="x", padx=10, pady=8)
+        self.threshold_slider.set(128)
+
+        ctk.CTkButton(
+            threshold_frame,
+            text="Binarize",
+            command=self.apply_threshold,
+            width=150
+        ).pack(pady=(8, 10))
+
+        # ------------------------------------------------------------------
+        # Bottom row: Structuring Element + Morphological Operations side by side
+        # ------------------------------------------------------------------
+        bottom_row = ctk.CTkFrame(morphology_frame, fg_color="transparent")
+        bottom_row.pack(fill="x", padx=5, pady=5)
+
+        bottom_row.grid_columnconfigure(0, weight=1)
+        bottom_row.grid_columnconfigure(1, weight=1)
+
+        # ---------------- Structuring element section ----------------
+        se_frame = ctk.CTkFrame(bottom_row)
+        se_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=5)
+
+        ctk.CTkLabel(
+            se_frame,
+            text="Structuring Element",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(pady=(8, 6))
+
+        ctk.CTkLabel(
+            se_frame,
+            text="SE Size",
+            font=ctk.CTkFont(size=11)
+        ).pack(anchor="w", padx=10)
+
+        self.se_size_entry = ctk.CTkEntry(se_frame)
+        self.se_size_entry.pack(padx=10, pady=(2, 6), fill="x")
+        self.se_size_entry.insert(0, "3")
+
+        ctk.CTkLabel(
+            se_frame,
+            text="SE Shape",
+            font=ctk.CTkFont(size=11)
+        ).pack(anchor="w", padx=10)
+
+        self.se_shape_menu = ctk.CTkOptionMenu(
+            se_frame,
+            values=["Square", "Cross"]
+        )
+        self.se_shape_menu.pack(padx=10, pady=(2, 6), fill="x")
+        self.se_shape_menu.set("Square")
+
+        ctk.CTkLabel(
+            se_frame,
+            text="Size must be odd: 3, 5, 7...",
+            font=ctk.CTkFont(size=10),
+            text_color="#999"
+        ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        # ---------------- Morphology operations section ----------------
+        operations_frame = ctk.CTkFrame(bottom_row)
+        operations_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=5)
+
+        ctk.CTkLabel(
+            operations_frame,
+            text="Morphological Operations",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(pady=(8, 6))
+
+        buttons_row_1 = ctk.CTkFrame(operations_frame, fg_color="transparent")
+        buttons_row_1.pack(pady=3)
+
+        ctk.CTkButton(
+            buttons_row_1,
+            text="Erosion",
+            command=self.apply_erosion,
+            width=120
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            buttons_row_1,
+            text="Dilation",
+            command=self.apply_dilation,
+            width=120
+        ).pack(side="left", padx=3)
+
+        buttons_row_2 = ctk.CTkFrame(operations_frame, fg_color="transparent")
+        buttons_row_2.pack(pady=3)
+
+        ctk.CTkButton(
+            buttons_row_2,
+            text="Opening",
+            command=self.apply_opening,
+            width=120
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            buttons_row_2,
+            text="Closing",
+            command=self.apply_closing,
+            width=120
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            operations_frame,
+            text="Boundary Extraction",
+            command=self.apply_boundary_extraction,
+            width=250,
+            fg_color="#5b3f8c",
+            hover_color="#432d69"
+        ).pack(pady=(6, 10))
+
+        ctk.CTkLabel(
+            operations_frame,
+            text="Tip: Binarize first. Morphology uses the current processed image.",
+            font=ctk.CTkFont(size=10),
+            text_color="#999",
+            wraplength=260
+        ).pack(pady=(0, 8))           
         # ---------------- Noise & ROI section ----------------
         noise_roi_frame = ctk.CTkFrame(sections_frame)
         noise_roi_frame.grid(row=0, column=3, sticky="nsew", padx=5, pady=5)
@@ -844,6 +1021,26 @@ class MedicalImageApp:
 
         return value
 
+    def on_threshold_slider_change(self, value):
+        threshold_value = int(float(value))
+        self.threshold_value_label.configure(
+            text=f"Threshold Value: {threshold_value}"
+        )
+
+
+    def get_threshold_value(self):
+        return int(float(self.threshold_slider.get()))
+
+
+    def get_structuring_element_from_gui(self):
+        se_size = self.get_valid_odd_integer(
+            self.se_size_entry,
+            "Structuring element size"
+        )
+
+        se_shape = self.se_shape_menu.get()
+
+        return create_structuring_element(se_size, se_shape), se_size, se_shape
 
     def apply_pipeline_operation(self, operation_function, operation_name):
         """
@@ -892,6 +1089,62 @@ class MedicalImageApp:
                 f"Could not apply {operation_name}.\nReason: {str(e)}"
             )
             self.status_label.configure(text="Operation failed")        
+
+    def apply_morphology_operation(self, operation_function, operation_name):
+        """
+        Central function for morphology operations.
+
+        Morphology should work on the currently displayed processed image,
+        not necessarily on the original image.
+
+        This avoids the problem where:
+            Binarize -> Erosion
+
+        would fail when pipeline mode is OFF.
+
+        Unlike general enhancement operations, morphology is naturally sequential:
+        thresholding creates a binary mask, then erosion/dilation/opening/closing
+        should work on that binary mask.
+        """
+        if not self.pipeline.has_image():
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+
+        try:
+            input_image = self.pipeline.get_current()
+
+            if input_image is None:
+                messagebox.showwarning("No Image", "Please load an image first.")
+                return
+
+            if not self.warn_if_large_image(input_image, operation_name):
+                self.status_label.configure(text="Operation cancelled")
+                return
+
+            self.status_label.configure(text=f"Applying: {operation_name}...")
+            self.app.configure(cursor="watch")
+            self.app.update_idletasks()
+
+            result = operation_function(input_image)
+            self.app.configure(cursor="")
+
+            self.current_processed = self.pipeline.apply_result(result, operation_name)
+
+            self.zoom_factor = 1.0
+            self.zoom_label.configure(text="Zoom: 100%")
+
+            self.show_fit_image(self.processed_image_view, self.current_processed)
+
+            self.update_pipeline_log()
+            self.status_label.configure(text=f"Applied: {operation_name}")
+
+        except Exception as e:
+            self.app.configure(cursor="")
+            messagebox.showerror(
+                "Operation Error",
+                f"Could not apply {operation_name}.\nReason: {str(e)}"
+            )
+            self.status_label.configure(text="Operation failed")
 
     def load_image(self):
         file_path = filedialog.askopenfilename(
@@ -1238,6 +1491,83 @@ class MedicalImageApp:
             self.apply_pipeline_operation(
                 lambda img: shear(img, shear_x=shear_x, shear_y=shear_y),
                 f"Shearing (x={shear_x}, y={shear_y})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+    def apply_threshold(self):
+        try:
+            threshold_value = self.get_threshold_value()
+
+            self.apply_morphology_operation(
+                lambda img: global_threshold(img, threshold_value),
+                f"Global Thresholding (T={threshold_value})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_erosion(self):
+        try:
+            se, se_size, se_shape = self.get_structuring_element_from_gui()
+
+            self.apply_morphology_operation(
+                lambda img: erode(img, se),
+                f"Erosion ({se_shape}, {se_size}x{se_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_dilation(self):
+        try:
+            se, se_size, se_shape = self.get_structuring_element_from_gui()
+
+            self.apply_morphology_operation(
+                lambda img: dilate(img, se),
+                f"Dilation ({se_shape}, {se_size}x{se_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_opening(self):
+        try:
+            se, se_size, se_shape = self.get_structuring_element_from_gui()
+
+            self.apply_morphology_operation(
+                lambda img: opening(img, se),
+                f"Opening ({se_shape}, {se_size}x{se_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_closing(self):
+        try:
+            se, se_size, se_shape = self.get_structuring_element_from_gui()
+
+            self.apply_morphology_operation(
+                lambda img: closing(img, se),
+                f"Closing ({se_shape}, {se_size}x{se_size})"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Invalid Input", str(e))
+
+
+    def apply_boundary_extraction(self):
+        try:
+            se, se_size, se_shape = self.get_structuring_element_from_gui()
+
+            self.apply_morphology_operation(
+                lambda img: boundary_extraction(img, se),
+                f"Boundary Extraction ({se_shape}, {se_size}x{se_size})"
             )
 
         except Exception as e:

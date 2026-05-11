@@ -3,7 +3,7 @@ def _to_gray_float(arr: np.ndarray) -> np.ndarray:
     """
     Convert an image array to a 2-D float64 grayscale array.
     Handles both grayscale (H, W) and RGB (H, W, 3) inputs.
-    Uses the standard luminance weights — implemented manually, no cv2/PIL.
+    Uses the standard luminance weights — implemented manually.
     """
     if arr.ndim == 2:
         return arr.astype(np.float64)
@@ -13,4 +13,12 @@ def _to_gray_float(arr: np.ndarray) -> np.ndarray:
                 + 0.5870 * arr[:, :, 1].astype(np.float64)
                 + 0.1140 * arr[:, :, 2].astype(np.float64))
     raise ValueError(f"Unsupported image shape: {arr.shape}")
+
+def _to_rgb_uint8(arr: np.ndarray) -> np.ndarray:
+    """Return a (H, W, 3) uint8 array regardless of whether input is gray or RGB."""
+    if arr.ndim == 2:
+        channel = np.clip(arr, 0, 255).astype(np.uint8)
+        return np.stack([channel, channel, channel], axis=-1)
+    return np.clip(arr, 0, 255).astype(np.uint8)
+
 

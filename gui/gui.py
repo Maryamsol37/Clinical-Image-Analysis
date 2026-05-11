@@ -693,7 +693,15 @@ class MedicalImageApp:
             width=250,
             fg_color="#5b3f8c",
             hover_color="#432d69"
-        ).pack(pady=(6, 10))   
+        ).pack(pady=(6, 10))
+
+        ctk.CTkLabel(
+            operations_frame,
+            text="Tip: Binarize first. Morphology uses the current processed image.",
+            font=ctk.CTkFont(size=10),
+            text_color="#999",
+            wraplength=260
+        ).pack(pady=(0, 8))           
 
     def build_pipeline_log_tab(self):
         log_tab = self.tab_view.tab("Pipeline Log")
@@ -906,6 +914,62 @@ class MedicalImageApp:
                 f"Could not apply {operation_name}.\nReason: {str(e)}"
             )
             self.status_label.configure(text="Operation failed")        
+
+    def apply_morphology_operation(self, operation_function, operation_name):
+        """
+        Central function for morphology operations.
+
+        Morphology should work on the currently displayed processed image,
+        not necessarily on the original image.
+
+        This avoids the problem where:
+            Binarize -> Erosion
+
+        would fail when pipeline mode is OFF.
+
+        Unlike general enhancement operations, morphology is naturally sequential:
+        thresholding creates a binary mask, then erosion/dilation/opening/closing
+        should work on that binary mask.
+        """
+        if not self.pipeline.has_image():
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+
+        try:
+            input_image = self.pipeline.get_current()
+
+            if input_image is None:
+                messagebox.showwarning("No Image", "Please load an image first.")
+                return
+
+            if not self.warn_if_large_image(input_image, operation_name):
+                self.status_label.configure(text="Operation cancelled")
+                return
+
+            self.status_label.configure(text=f"Applying: {operation_name}...")
+            self.app.configure(cursor="watch")
+            self.app.update_idletasks()
+
+            result = operation_function(input_image)
+            self.app.configure(cursor="")
+
+            self.current_processed = self.pipeline.apply_result(result, operation_name)
+
+            self.zoom_factor = 1.0
+            self.zoom_label.configure(text="Zoom: 100%")
+
+            self.show_fit_image(self.processed_image_view, self.current_processed)
+
+            self.update_pipeline_log()
+            self.status_label.configure(text=f"Applied: {operation_name}")
+
+        except Exception as e:
+            self.app.configure(cursor="")
+            messagebox.showerror(
+                "Operation Error",
+                f"Could not apply {operation_name}.\nReason: {str(e)}"
+            )
+            self.status_label.configure(text="Operation failed")
 
     def load_image(self):
         file_path = filedialog.askopenfilename(
@@ -1199,7 +1263,7 @@ class MedicalImageApp:
         try:
             threshold_value = self.get_threshold_value()
 
-            self.apply_pipeline_operation(
+            self.apply_morphology_operation(
                 lambda img: global_threshold(img, threshold_value),
                 f"Global Thresholding (T={threshold_value})"
             )
@@ -1212,7 +1276,7 @@ class MedicalImageApp:
         try:
             se, se_size, se_shape = self.get_structuring_element_from_gui()
 
-            self.apply_pipeline_operation(
+            self.apply_morphology_operation(
                 lambda img: erode(img, se),
                 f"Erosion ({se_shape}, {se_size}x{se_size})"
             )
@@ -1225,7 +1289,7 @@ class MedicalImageApp:
         try:
             se, se_size, se_shape = self.get_structuring_element_from_gui()
 
-            self.apply_pipeline_operation(
+            self.apply_morphology_operation(
                 lambda img: dilate(img, se),
                 f"Dilation ({se_shape}, {se_size}x{se_size})"
             )
@@ -1238,7 +1302,7 @@ class MedicalImageApp:
         try:
             se, se_size, se_shape = self.get_structuring_element_from_gui()
 
-            self.apply_pipeline_operation(
+            self.apply_morphology_operation(
                 lambda img: opening(img, se),
                 f"Opening ({se_shape}, {se_size}x{se_size})"
             )
@@ -1251,7 +1315,7 @@ class MedicalImageApp:
         try:
             se, se_size, se_shape = self.get_structuring_element_from_gui()
 
-            self.apply_pipeline_operation(
+            self.apply_morphology_operation(
                 lambda img: closing(img, se),
                 f"Closing ({se_shape}, {se_size}x{se_size})"
             )
@@ -1264,7 +1328,7 @@ class MedicalImageApp:
         try:
             se, se_size, se_shape = self.get_structuring_element_from_gui()
 
-            self.apply_pipeline_operation(
+            self.apply_morphology_operation(
                 lambda img: boundary_extraction(img, se),
                 f"Boundary Extraction ({se_shape}, {se_size}x{se_size})"
             )

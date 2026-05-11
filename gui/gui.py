@@ -1191,6 +1191,7 @@ class MedicalImageApp:
         right_panel.rowconfigure(1, weight=3)
         right_panel.rowconfigure(3, weight=2)
         right_panel.columnconfigure(0, weight=1)
+        right_panel.columnconfigure(1, weight=0)
 
         ctk.CTkLabel(
             right_panel, text="Step 2 — Match result (bounding box in red)",
@@ -1204,7 +1205,15 @@ class MedicalImageApp:
             right_panel, text="Correlation map (brighter = better match):",
             font=ctk.CTkFont(size=11), text_color="#aaa"
         ).grid(row=2, column=0, sticky="w", padx=8, pady=(4, 0))
-
+        # Toggle: colored heatmap vs grayscale
+        self._tm_color_toggle = ctk.CTkSwitch(
+            right_panel, text="Colored heatmap"
+        )
+        try:
+            self._tm_color_toggle.select()
+        except Exception:
+            pass
+        self._tm_color_toggle.grid(row=2, column=1, sticky="e", padx=(0, 8), pady=(4, 0))
         self._tm_corr_canvas = tk.Canvas(
             right_panel, bg="#1e1e1e", height=110, highlightthickness=1,
             highlightbackground="#555"
@@ -1383,41 +1392,93 @@ class MedicalImageApp:
             out_h = max(1, ih_full - th + 1)
             out_w = max(1, iw_full - tw + 1)
             corr_valid = norm_corr[:out_h, :out_w]
-            corr_display = (corr_valid * 255).astype(np.uint8)
-            corr_out = _tm_draw_on_canvas(corr_canvas, corr_display)
-            if corr_out is not None:
-                _, sc, ocx, ocy = corr_out
-                ccw = corr_canvas.winfo_width()
-                cch = corr_canvas.winfo_height()
-                ch_h, ch_w = corr_display.shape
-                sc2 = min(ccw / ch_w, cch / ch_h)
-                cdw, cdh = int(ch_w * sc2), int(ch_h * sc2)
-                cocx, cocy = (ccw - cdw) // 2, (cch - cdh) // 2
-                pil_c = Image.fromarray(corr_display, mode="L").resize(
-                    (cdw, cdh), Image.LANCZOS
-                )
-                self._tm_photo_corr = ImageTk.PhotoImage(pil_c)
-                corr_canvas.delete("all")
-                corr_canvas.create_image(cocx, cocy, anchor="nw",
-                                         image=self._tm_photo_corr)
-                # Optionally draw peak marker on the displayed valid-region
-                # Map peak (pr,pc) in valid-region to displayed coordinates
-                try:
-                    # pr, pc are integers (row, col) within valid region
-                    disp_x = cocx + int(pc * sc2)
-                    disp_y = cocy + int(pr * sc2)
-                    # draw a small green cross
-                    size = max(3, int(4 * sc2))
-                    corr_canvas.create_line(disp_x - size, disp_y, disp_x + size, disp_y, fill='lime', width=2)
-                    corr_canvas.create_line(disp_x, disp_y - size, disp_x, disp_y + size, fill='lime', width=2)
-                except Exception:
-                    pass
+            # Best (maximum) normalized cross-correlation score in the valid region
+            try:
+                max_score = float(np.max(corr_valid))
+            except Exception:
+                max_score = float('nan')
+            # Create a colored heatmap (RGB) or grayscale depending on toggle.
+            colored = True
+            try:
+                colored = bool(self._tm_color_toggle.get())
+            except Exception:
+                colored = True
 
-            # Update info label
+            # Normalize corr_valid first.
+            minv = float(np.min(corr_valid))
+            maxv = float(np.max(corr_valid))
+            if maxv - minv > 0:
+                norm = (corr_valid - minv) / (maxv - minv)
+            else:
+                norm = np.zeros_like(corr_valid)
+            if colored:
+                # Try matplotlib colormap first; fall back to a simple jet-like numpy map.
+                try:
+                    import matplotlib.cm as cm
+                    cmap = cm.get_cmap('viridis')
+                    rgba = cmap(norm)
+                    rgb = (rgba[..., :3] * 255).astype(np.uint8)
+                except Exception:
+                    v = norm
+                    r = np.clip(1.5 - np.abs(4 * v - 3), 0, 1)
+                    g = np.clip(1.5 - np.abs(4 * v - 2), 0, 1)
+                    b = np.clip(1.5 - np.abs(4 * v - 1), 0, 1)
+                    rgb = np.stack([r, g, b], axis=-1)
+                    rgb = (rgb * 255).astype(np.uint8)
+
+                corr_out = _tm_draw_on_canvas(corr_canvas, rgb)
+                if corr_out is not None:
+                    _, sc, ocx, ocy = corr_out
+                    ccw = corr_canvas.winfo_width()
+                    cch = corr_canvas.winfo_height()
+                    ch_h, ch_w = rgb.shape[:2]
+                    sc2 = min(ccw / ch_w, cch / ch_h)
+                    cdw, cdh = int(ch_w * sc2), int(ch_h * sc2)
+                    cocx, cocy = (ccw - cdw) // 2, (cch - cdh) // 2
+                    pil_c = Image.fromarray(rgb, mode="RGB").resize((cdw, cdh), Image.LANCZOS)
+                    self._tm_photo_corr = ImageTk.PhotoImage(pil_c)
+                    corr_canvas.delete("all")
+                    corr_canvas.create_image(cocx, cocy, anchor="nw", image=self._tm_photo_corr)
+                    # Draw peak marker on the displayed valid-region
+                    try:
+                        disp_x = cocx + int(pc * sc2)
+                        disp_y = cocy + int(pr * sc2)
+                        size = max(3, int(4 * sc2))
+                        corr_canvas.create_line(disp_x - size, disp_y, disp_x + size, disp_y, fill='lime', width=2)
+                        corr_canvas.create_line(disp_x, disp_y - size, disp_x, disp_y + size, fill='lime', width=2)
+                    except Exception:
+                        pass
+            else:
+                corr_display = (norm * 255).astype(np.uint8)
+                corr_out = _tm_draw_on_canvas(corr_canvas, corr_display)
+                if corr_out is not None:
+                    _, sc, ocx, ocy = corr_out
+                    ccw = corr_canvas.winfo_width()
+                    cch = corr_canvas.winfo_height()
+                    ch_h, ch_w = corr_display.shape
+                    sc2 = min(ccw / ch_w, cch / ch_h)
+                    cdw, cdh = int(ch_w * sc2), int(ch_h * sc2)
+                    cocx, cocy = (ccw - cdw) // 2, (cch - cdh) // 2
+                    pil_c = Image.fromarray(corr_display, mode="L").resize((cdw, cdh), Image.LANCZOS)
+                    self._tm_photo_corr = ImageTk.PhotoImage(pil_c)
+                    corr_canvas.delete("all")
+                    corr_canvas.create_image(cocx, cocy, anchor="nw", image=self._tm_photo_corr)
+                    try:
+                        disp_x = cocx + int(pc * sc2)
+                        disp_y = cocy + int(pr * sc2)
+                        size = max(3, int(4 * sc2))
+                        corr_canvas.create_line(disp_x - size, disp_y, disp_x + size, disp_y, fill='lime', width=2)
+                        corr_canvas.create_line(disp_x, disp_y - size, disp_x, disp_y + size, fill='lime', width=2)
+                    except Exception:
+                        pass
+
+            # Update info label (include best NCC score)
+            score_text = f"Best NCC Score: {max_score:.2f}" if not np.isnan(max_score) else "Best NCC Score: N/A"
             self._tm_result_label.configure(
-                text=f"Match found at image row={pr}, col={pc}  |  "
-                     f"Bounding box: top-left=({pc}, {pr}), "
-                     f"bottom-right=({pc + tw}, {pr + th})"
+                text=(f"Match found at image row={pr}, col={pc}  |  "
+                      f"Bounding box: top-left=({pc}, {pr}), "
+                      f"bottom-right=({pc + tw}, {pr + th})  |  "
+                      f"{score_text}")
             )
             self.status_label.configure(text="Template matching complete")
 

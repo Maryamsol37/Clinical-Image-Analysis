@@ -174,10 +174,11 @@ def fourier_cross_correlate_normalized(image: np.ndarray, template: np.ndarray):
     local_var = np.clip(local_mean_sq - local_mean ** 2, 0.0, None)
     local_std = np.sqrt(local_var)
 
+    # Add a small epsilon to the denominator to avoid numerical instability
     denom = N * local_std
-    safe = denom > 1e-12
-    ncc_valid = np.zeros((out_h, out_w), dtype=np.float64)
-    ncc_valid[safe] = numerator[safe] / denom[safe]
+    eps = 1e-8
+    denom_safe = denom + eps
+    ncc_valid = numerator / denom_safe
     ncc_valid = np.clip(ncc_valid, -1.0, 1.0)
 
     # ── Memory optimization: avoid redundant full-size array ──────────────────

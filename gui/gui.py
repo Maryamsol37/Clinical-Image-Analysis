@@ -17,6 +17,7 @@ from processing.histogram.local_equalization import (
     local_histogram_equalization_optimized
 )
 from processing.geometry.transformations import rotate, shear
+from processing.frequency.frequency_template_matching import fourier_cross_correlate
 
 
 ctk.set_appearance_mode("dark")
@@ -149,11 +150,52 @@ class ScrollableImageView(ctk.CTkFrame):
         self.canvas.scan_dragto(event.x, event.y, gain=1)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Helper function for Template Matching tab
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _tm_draw_on_canvas(canvas, image_array):
+    """
+    Fit image_array into canvas, return (photo, scale, ox, oy) for coordinate mapping.
+    Returns None if canvas not yet realized.
+    """
+    cw = canvas.winfo_width()
+    ch = canvas.winfo_height()
+    if cw <= 1 or ch <= 1:
+        return None
+
+    ih, iw = image_array.shape[:2]
+    scale = min(cw / iw, ch / ih)
+    dw, dh = int(iw * scale), int(ih * scale)
+    ox = (cw - dw) // 2
+    oy = (ch - dh) // 2
+
+    if image_array.ndim == 2:
+        pil_img = Image.fromarray(np.clip(image_array, 0, 255).astype(np.uint8), mode="L")
+    else:
+        pil_img = Image.fromarray(np.clip(image_array, 0, 255).astype(np.uint8))
+
+    pil_img = pil_img.resize((dw, dh), Image.LANCZOS)
+    return ImageTk.PhotoImage(pil_img), scale, ox, oy
+
+
 class MedicalImageApp:
     def __init__(self):
         self.current_original = None
         self.current_processed = None
         self.zoom_factor = 1.0
+
+        # Template Matching state
+        self._tm_template       = None
+        self._tm_crop_start     = None
+        self._tm_rect_id        = None
+        self._tm_scale          = 1.0
+        self._tm_offset_x       = 0
+        self._tm_offset_y       = 0
+        self._tm_photo_crop     = None
+        self._tm_photo_result   = None
+        self._tm_photo_corr     = None
+        self._tm_photo_template = None
 
         self.pipeline = PipelineManager()
 
@@ -300,10 +342,12 @@ class MedicalImageApp:
         self.tab_view.add("Image Viewer")
         self.tab_view.add("Pipeline Log")
         self.tab_view.add("Metadata")
+        self.tab_view.add("Template Matching")
 
         self.build_image_viewer_tab()
         self.build_pipeline_log_tab()
         self.build_metadata_tab()
+        self.build_template_matching_tab()
 
     def build_image_viewer_tab(self):
         viewer_tab = self.tab_view.tab("Image Viewer")
@@ -1058,7 +1102,326 @@ class MedicalImageApp:
         self.zoom_factor = 1.0
         self.zoom_label.configure(text="Zoom: 100%")
 
-        self.status_label.configure(text="Reset to original")            
+        self.status_label.configure(text="Reset to original")
+
+    # ======================================================================
+    #   TEMPLATE MATCHING TAB
+    # ======================================================================
+
+    def build_template_matching_tab(self):
+        """
+        Layout of the Template Matching tab
+        ────────────────────────────────────
+        Left half  → interactive crop canvas (rubber-band selection on the image)
+        Right half → result viewer (original + bounding box) + correlation map
+        """
+        tab = self.tab_view.tab("Template Matching")
+
+        # ── outer two-column frame ───────────────────────────────────────────────
+        outer = ctk.CTkFrame(tab)
+        outer.pack(fill="both", expand=True, padx=8, pady=8)
+        outer.columnconfigure(0, weight=1)
+        outer.columnconfigure(1, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        # ── LEFT — crop panel ───────────────────────────────────────────────────
+        left_panel = ctk.CTkFrame(outer)
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left_panel.rowconfigure(1, weight=1)
+        left_panel.columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            left_panel, text="Step 1 — Draw crop rectangle on the image",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, pady=(6, 2), padx=6, sticky="w")
+
+        # Canvas that shows the image and lets user draw a rectangle
+        self._tm_crop_canvas = tk.Canvas(left_panel, bg="#2b2b2b", highlightthickness=0)
+        self._tm_crop_canvas.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=6, pady=4)
+
+        self._tm_crop_canvas.bind("<ButtonPress-1>",   self._tm_on_press)
+        self._tm_crop_canvas.bind("<B1-Motion>",        self._tm_on_drag)
+        self._tm_crop_canvas.bind("<ButtonRelease-1>",  self._tm_on_release)
+        self._tm_crop_canvas.bind("<Configure>",        self._tm_redraw_crop_canvas)
+
+        # Template preview strip
+        ctk.CTkLabel(
+            left_panel, text="Cropped template:",
+            font=ctk.CTkFont(size=11), text_color="#aaa"
+        ).grid(row=2, column=0, sticky="w", padx=8, pady=(4, 0))
+
+        self._tm_template_preview = tk.Canvas(
+            left_panel, bg="#1e1e1e", height=70, highlightthickness=1,
+            highlightbackground="#555"
+        )
+        self._tm_template_preview.grid(row=3, column=0, columnspan=2,
+                                       sticky="ew", padx=6, pady=(0, 4))
+
+        self._tm_info_label = ctk.CTkLabel(
+            left_panel, text="No template selected yet.",
+            font=ctk.CTkFont(size=11), text_color="#888"
+        )
+        self._tm_info_label.grid(row=4, column=0, columnspan=2,
+                                  sticky="w", padx=8, pady=(0, 2))
+
+        # Action buttons
+        btn_row = ctk.CTkFrame(left_panel, fg_color="transparent")
+        btn_row.grid(row=5, column=0, columnspan=2, pady=6, padx=6, sticky="ew")
+
+        ctk.CTkButton(
+            btn_row, text="Run Cross-Correlation",
+            command=self._tm_run,
+            height=36, font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1a5276", hover_color="#154360"
+        ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+        ctk.CTkButton(
+            btn_row, text="Clear",
+            command=self._tm_clear,
+            height=36, font=ctk.CTkFont(size=12),
+            fg_color="#555", hover_color="#444"
+        ).pack(side="left", expand=True, fill="x")
+
+        # ── RIGHT — result panel ─────────────────────────────────────────────────
+        right_panel = ctk.CTkFrame(outer)
+        right_panel.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        right_panel.rowconfigure(1, weight=3)
+        right_panel.rowconfigure(3, weight=2)
+        right_panel.columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            right_panel, text="Step 2 — Match result (bounding box in red)",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).grid(row=0, column=0, pady=(6, 2), padx=6, sticky="w")
+
+        self._tm_result_canvas = tk.Canvas(right_panel, bg="#2b2b2b", highlightthickness=0)
+        self._tm_result_canvas.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
+
+        ctk.CTkLabel(
+            right_panel, text="Correlation map (brighter = better match):",
+            font=ctk.CTkFont(size=11), text_color="#aaa"
+        ).grid(row=2, column=0, sticky="w", padx=8, pady=(4, 0))
+
+        self._tm_corr_canvas = tk.Canvas(
+            right_panel, bg="#1e1e1e", height=110, highlightthickness=1,
+            highlightbackground="#555"
+        )
+        self._tm_corr_canvas.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
+
+        self._tm_result_label = ctk.CTkLabel(
+            right_panel, text="Run matching to see results here.",
+            font=ctk.CTkFont(size=11), text_color="#888"
+        )
+        self._tm_result_label.grid(row=4, column=0, sticky="w", padx=8, pady=(0, 6))
+
+    def _tm_redraw_crop_canvas(self, event=None):
+        """Redraw the crop canvas whenever it is resized or a new image is loaded."""
+        canvas = self._tm_crop_canvas
+        canvas.delete("all")
+
+        if self.current_original is None:
+            cw = canvas.winfo_width()
+            ch = canvas.winfo_height()
+            if cw > 1:
+                canvas.create_text(
+                    cw // 2, ch // 2,
+                    text="Load an image first, then draw a crop rectangle here.",
+                    fill="#aaaaaa", font=("Segoe UI", 11, "italic"),
+                    width=cw - 20
+                )
+            return
+
+        result = _tm_draw_on_canvas(canvas, self.current_original)
+        if result is None:
+            canvas.after(50, self._tm_redraw_crop_canvas)
+            return
+
+        photo, scale, ox, oy = result
+        self._tm_photo_crop = photo        # keep reference
+        self._tm_scale    = scale
+        self._tm_offset_x = ox
+        self._tm_offset_y = oy
+        canvas.create_image(ox, oy, anchor="nw", image=self._tm_photo_crop)
+        self._tm_rect_id  = None
+
+    def _tm_on_press(self, event):
+        """Record start of rubber-band rectangle."""
+        if self.current_original is None:
+            return
+        self._tm_crop_start = (event.x, event.y)
+        if self._tm_rect_id is not None:
+            self._tm_crop_canvas.delete(self._tm_rect_id)
+            self._tm_rect_id = None
+
+    def _tm_on_drag(self, event):
+        """Stretch the rubber-band rectangle while dragging."""
+        if self._tm_crop_start is None:
+            return
+        if self._tm_rect_id is not None:
+            self._tm_crop_canvas.delete(self._tm_rect_id)
+        x0, y0 = self._tm_crop_start
+        self._tm_rect_id = self._tm_crop_canvas.create_rectangle(
+            x0, y0, event.x, event.y,
+            outline="#00FF88", width=2, dash=(4, 2)
+        )
+
+    def _tm_on_release(self, event):
+        """
+        On mouse release: convert canvas coords → original image coords, crop template.
+        """
+        if self._tm_crop_start is None or self.current_original is None:
+            return
+
+        x0, y0 = self._tm_crop_start
+        x1, y1 = event.x, event.y
+        self._tm_crop_start = None
+
+        # Ensure x0 < x1, y0 < y1
+        cx0, cy0 = min(x0, x1), min(y0, y1)
+        cx1, cy1 = max(x0, x1), max(y0, y1)
+
+        # Map canvas coords back to original image coords
+        ox, oy = self._tm_offset_x, self._tm_offset_y
+        scale  = self._tm_scale
+        ih, iw = self.current_original.shape[:2]
+
+        img_x0 = int(np.clip((cx0 - ox) / scale, 0, iw - 1))
+        img_y0 = int(np.clip((cy0 - oy) / scale, 0, ih - 1))
+        img_x1 = int(np.clip((cx1 - ox) / scale, 0, iw))
+        img_y1 = int(np.clip((cy1 - oy) / scale, 0, ih))
+
+        if img_x1 - img_x0 < 2 or img_y1 - img_y0 < 2:
+            messagebox.showwarning(
+                "Template Too Small",
+                "The selected region is too small.\nPlease drag a larger rectangle."
+            )
+            return
+
+        self._tm_template = self.current_original[img_y0:img_y1, img_x0:img_x1]
+
+        # Show template preview
+        th, tw = self._tm_template.shape[:2]
+        self._tm_info_label.configure(
+            text=f"Template: {tw} × {th} px  (drag area in image coords: "
+                 f"x={img_x0}–{img_x1}, y={img_y0}–{img_y1})"
+        )
+
+        # Fit template into preview strip
+        prev_canvas = self._tm_template_preview
+        pw = prev_canvas.winfo_width()
+        ph = prev_canvas.winfo_height()
+        if pw <= 1:
+            pw, ph = 200, 70
+
+        t_scale = min(pw / tw, ph / th)
+        dw, dh  = max(1, int(tw * t_scale)), max(1, int(th * t_scale))
+        if self._tm_template.ndim == 2:
+            pil_t = Image.fromarray(
+                np.clip(self._tm_template, 0, 255).astype(np.uint8), mode="L"
+            )
+        else:
+            pil_t = Image.fromarray(
+                np.clip(self._tm_template, 0, 255).astype(np.uint8)
+            )
+        pil_t = pil_t.resize((dw, dh), Image.LANCZOS)
+        self._tm_photo_template = ImageTk.PhotoImage(pil_t)
+        prev_canvas.delete("all")
+        prev_canvas.create_image(pw // 2, ph // 2, anchor="center",
+                                  image=self._tm_photo_template)
+
+    def _tm_run(self):
+        """Run Fourier cross-correlation and display result + correlation map."""
+        if self.current_original is None:
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+        if self._tm_template is None:
+            messagebox.showwarning(
+                "No Template",
+                "Please draw a crop rectangle on the image to select a template."
+            )
+            return
+
+        try:
+            self.status_label.configure(text="Running cross-correlation…")
+            self._tm_result_label.configure(text="Computing…")
+            self.app.update_idletasks()
+
+            result_img, norm_corr, (pr, pc), (th, tw) = fourier_cross_correlate(
+                self.current_original, self._tm_template
+            )
+
+            # ── Draw result image ────────────────────────────────────────────────
+            res_canvas = self._tm_result_canvas
+            res_canvas.delete("all")
+            out = _tm_draw_on_canvas(res_canvas, result_img)
+            if out is not None:
+                photo, _, _, _ = out
+                self._tm_photo_result = photo
+                res_canvas.create_image(0, 0, anchor="nw", image=self._tm_photo_result)
+                # Re-draw properly centred
+                cw = res_canvas.winfo_width()
+                ch = res_canvas.winfo_height()
+                ih2, iw2 = result_img.shape[:2]
+                s = min(cw / iw2, ch / ih2)
+                dw2, dh2 = int(iw2 * s), int(ih2 * s)
+                ox2, oy2 = (cw - dw2) // 2, (ch - dh2) // 2
+                pil_r = Image.fromarray(result_img).resize((dw2, dh2), Image.LANCZOS)
+                self._tm_photo_result = ImageTk.PhotoImage(pil_r)
+                res_canvas.delete("all")
+                res_canvas.create_image(ox2, oy2, anchor="nw",
+                                        image=self._tm_photo_result)
+
+            # ── Draw correlation map ─────────────────────────────────────────────
+            corr_canvas = self._tm_corr_canvas
+            corr_canvas.delete("all")
+            corr_display = (norm_corr * 255).astype(np.uint8)
+            corr_out = _tm_draw_on_canvas(corr_canvas, corr_display)
+            if corr_out is not None:
+                _, sc, ocx, ocy = corr_out
+                ccw = corr_canvas.winfo_width()
+                cch = corr_canvas.winfo_height()
+                ch_h, ch_w = corr_display.shape
+                sc2 = min(ccw / ch_w, cch / ch_h)
+                cdw, cdh = int(ch_w * sc2), int(ch_h * sc2)
+                cocx, cocy = (ccw - cdw) // 2, (cch - cdh) // 2
+                pil_c = Image.fromarray(corr_display, mode="L").resize(
+                    (cdw, cdh), Image.LANCZOS
+                )
+                self._tm_photo_corr = ImageTk.PhotoImage(pil_c)
+                corr_canvas.delete("all")
+                corr_canvas.create_image(cocx, cocy, anchor="nw",
+                                         image=self._tm_photo_corr)
+
+            # Update info label
+            self._tm_result_label.configure(
+                text=f"Match found at image row={pr}, col={pc}  |  "
+                     f"Bounding box: top-left=({pc}, {pr}), "
+                     f"bottom-right=({pc + tw}, {pr + th})"
+            )
+            self.status_label.configure(text="Template matching complete")
+
+        except ValueError as ve:
+            messagebox.showerror("Input Error", str(ve))
+            self.status_label.configure(text="Matching failed")
+        except Exception as e:
+            messagebox.showerror("Error", f"Cross-correlation failed:\n{str(e)}")
+            self.status_label.configure(text="Matching failed")
+
+    def _tm_clear(self):
+        """Reset all template matching state."""
+        self._tm_template   = None
+        self._tm_crop_start = None
+        if self._tm_rect_id is not None:
+            self._tm_crop_canvas.delete(self._tm_rect_id)
+            self._tm_rect_id = None
+
+        self._tm_redraw_crop_canvas()
+        self._tm_template_preview.delete("all")
+        self._tm_result_canvas.delete("all")
+        self._tm_corr_canvas.delete("all")
+        self._tm_info_label.configure(text="No template selected yet.")
+        self._tm_result_label.configure(text="Run matching to see results here.")
+        self.status_label.configure(text="Template matching cleared")
 
     def run(self):
         self.app.mainloop()

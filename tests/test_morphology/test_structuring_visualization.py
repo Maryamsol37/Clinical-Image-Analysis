@@ -4,10 +4,7 @@ from matplotlib.patches import Rectangle
 import sys
 import os
 
-# Add the project root to the Python path to import from processing module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
-# Import the function from your existing module
 from processing.morphology.binary_morphology import create_structuring_element
 
 

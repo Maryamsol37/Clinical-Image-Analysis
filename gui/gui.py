@@ -2193,7 +2193,7 @@ class MedicalImageApp:
             messagebox.showerror("Invalid Input", str(e))
 
     # ── ROI ────────────────────────────────────────────────────────────────
-
+    "by3ml save llstart point"
     def _roi_drag_start(self, event):
         self.roi_start = (event.x, event.y)
         self.roi_end   = None
@@ -2201,6 +2201,7 @@ class MedicalImageApp:
             self.processed_image_view.canvas.delete(self.roi_rect)
             self.roi_rect = None
 
+    "brsm el yellow dashed line"
     def _roi_drag_move(self, event):
         if self.roi_start is None:
             return
@@ -2211,7 +2212,7 @@ class MedicalImageApp:
             x1, y1, event.x, event.y,
             outline="yellow", width=2, dash=(4, 2)
         )
-
+    "by3ml save llend point"
     def _roi_drag_end(self, event):
         if self.roi_start is None:
             return
@@ -2233,18 +2234,18 @@ class MedicalImageApp:
         messagebox.showwarning("No ROI", "Please draw an ROI on the processed image first.")
         return
 
-     # Convert canvas coords → actual image pixel coords BEFORE clearing
+     " Convert display coordinates coords to real image pixel coords BEFORE clearing"
      img_x1, img_y1 = self._canvas_to_image_coords(*self.roi_start)
      img_x2, img_y2 = self._canvas_to_image_coords(*self.roi_end)
 
-     # Capture converted values into the lambda immediately (avoids reference bug)
+     
      _x1, _y1, _x2, _y2 = img_x1, img_y1, img_x2, img_y2
 
      self.apply_pipeline_operation(
         lambda img: extract_roi(img, _x1, _y1, _x2, _y2),
         f"ROI Isolation ({abs(_x2-_x1)}×{abs(_y2-_y1)} px)"
      )
-
+    
      # Clear the rectangle after isolating
      self.roi_start = None
      self.roi_end   = None
@@ -2272,7 +2273,7 @@ class MedicalImageApp:
       )
       return
 
-     # Convert canvas coords → image pixel coords
+     " Convert display coordinates → real image coordinates"
      img_x1, img_y1 = self._canvas_to_image_coords(*self.roi_start)
      img_x2, img_y2 = self._canvas_to_image_coords(*self.roi_end)
 
@@ -2280,8 +2281,7 @@ class MedicalImageApp:
      if current_img is None:
         return
      # ──────────────────────────────────────────────────────────
-     # Extract the ROI pixels from the current image
-     from processing.roi.roi_tool import extract_roi  # ← WRONG (inside function)
+
      try:
          roi = extract_roi(current_img, img_x1, img_y1, img_x2, img_y2)
      except ValueError as e:
@@ -2301,30 +2301,31 @@ class MedicalImageApp:
       img = self.pipeline.get_current()
       if img is None:
         return canvas_x, canvas_y
-
+      "Gets the real image size and canvas size"
       img_h, img_w = img.shape[:2]
       canvas_w = self.processed_image_view.canvas.winfo_width()
       canvas_h = self.processed_image_view.canvas.winfo_height()
 
-      # This is the same scale factor used in update_display() fit mode
+      "Calculates how much the image was shrunk to fit the canvas"
       scale = min(canvas_w / img_w, canvas_h / img_h)
 
-      # The image is centred in the canvas — calculate the offset
+      "Calculates where the image starts inside the canvas , image centered 3shan "
+      "hncalculate el offset"
       display_w = int(img_w * scale)
       display_h = int(img_h * scale)
       offset_x  = (canvas_w - display_w) // 2
       offset_y  = (canvas_h - display_h) // 2
 
-      # Reverse the scale and offset
+      "removes the margins elfdya b3dha a3ks elshrinking "
       img_x = int((canvas_x - offset_x) / scale)
       img_y = int((canvas_y - offset_y) / scale)
 
-      # Clamp to image bounds
+      # Clamp to image bounderies
       img_x = max(0, min(img_x, img_w - 1))
       img_y = max(0, min(img_y, img_h - 1))
 
       return img_x, img_y
-    # processing/roi/roi_stats_window.py
+    
 
 
     def run(self):
